@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Sparky 3D — prueba lip-sync</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#0a1120;font-family:'Segoe UI',system-ui,sans-serif}
+  #avatar{position:absolute;inset:0}
+  #ui{position:absolute;left:0;right:0;bottom:6vh;display:flex;flex-direction:column;
+      align-items:center;gap:2vh;z-index:10}
+  button{font-size:3.2vmin;padding:1.6vh 4vw;border:none;border-radius:3vmin;cursor:pointer;
+         background:#2dd4ff;color:#06131f;font-weight:600;box-shadow:0 0 6vmin rgba(45,212,255,.5)}
+  button:disabled{opacity:.4;cursor:default}
+  #status{color:#9fd9ff;font-size:2.6vmin;min-height:3vh;text-align:center;padding:0 4vw}
+  #err{color:#ff8a8a}
+</style>
+</head>
+<body>
+  <div id="avatar"></div>
+  <div id="ui">
+    <div id="status">Pulsa Iniciar para cargar el avatar…</div>
+    <button id="start">▶ Iniciar</button>
+    <button id="mic" disabled>🎤 Probar lip-sync con micrófono</button>
+  </div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js/+esm",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+    "talkinghead": "https://cdn.jsdelivr.net/npm/@met4citizen/talkinghead@1.7/modules/talkinghead.mjs"
+  }
+}
+</script>
+
+<script type="module">
+import { TalkingHead } from "talkinghead";
+// HeadAudio: lip-sync dirigido por audio (independiente del idioma → funciona en español)
+import { HeadAudio } from "https://cdn.jsdelivr.net/gh/met4citizen/HeadAudio@main/modules/headaudio.mjs";
+
+const HEADAUDIO = "https://cdn.jsdelivr.net/gh/met4citizen/HeadAudio@main";
+// Avatar humano realista del repo TalkingHead (GLB con blendshapes ARKit + visemas Oculus)
+const AVATAR = "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@main/avatars/brunette.glb";
+
+const el = {
+  avatar: document.getElementById("avatar"),
+  status: document.getElementById("status"),
+  start: document.getElementById("start"),
+  mic: document.getElementById("mic"),
+};
+// Reporta a pantalla Y al log del servidor (para depurar sin abrir la consola)
+const log = (msg) => { fetch("/log?m=" + encodeURIComponent(msg)).catch(()=>{}); };
+const setStatus = (t, err=false) => {
+  el.status.textContent = t;
+  el.status.id = err ? "err" : "status";
+  log((err ? "ERROR: " : "ok: ") + t);
+};
+
+// Capturar cualquier error que se escape
+window.addEventListener("error", (e) =>
+  setStatus("JS error: " + (e.message || e.error) + " @ " + (e.filename||"") + ":" + (e.lineno||""), true));
+window.addEventListener("unhandledrejection", (e) =>
+  setStatus("Promesa rechazada: " + ((e.reason && e.reason.message) || e.reason), true));
+
+let head, headaudio;
+
+el.start.onclick = async () => {
+  el.start.disabled = true;
+  try {
+    // Comprobar WebGL antes de nada (la GT 710 es vieja)
+    const probe = document.createElement("canvas");
+    const gl = probe.getContext("webgl2") || probe.getContext("webgl");
+    if (!gl) { setStatus("Tu navegador/GPU no soporta WebGL. El avatar 3D no puede correr aquí.", true); el.start.disabled=false; return; }
+    log("WebGL OK: " + (gl.getParameter(gl.VERSION) || "?"));
+
+    setStatus("Cargando motor 3D…");
+    head = new TalkingHead(el.avatar, {
+      ttsEndpoint: "N/A",
+      lipsyncModules: [],          // sin módulos de idioma: usamos HeadAudio (audio)
+      cameraView: "upper",
+      modelFPS: 30,                // 30 fps para hardware modesto (GT 710)
+      mixerGainSpeech: 3,
+    });
+
+    setStatus("Cargando avatar humano… (puede tardar la 1ª vez)");
+    await head.showAvatar({
+      url: AVATAR,
+      body: "F",
+      avatarMood: "neutral",
+      lipsyncLang: "en",           // irrelevante: el movimiento viene del audio
+    });
+
+    setStatus("Cargando motor de lip-sync (HeadAudio)…");
+    await head.audioCtx.audioWorklet.addModule(HEADAUDIO + "/modules/headworklet.mjs");
+    headaudio = new HeadAudio(head.audioCtx, {
+      processorOptions: { vadEventsEnabled: true, visemeEventsEnabled: true },
+      parameterData: { vadMode: 1 },
+    });
+    await headaudio.loadModel(HEADAUDIO + "/dist/model-en-mixed.bin");
+
+    // Los visemas detectados mueven los morph targets del avatar
+    headaudio.onvalue = (key, value) => {
+      Object.assign(head.mtAvatar[key], { newvalue: value, needsUpdate: true });
+    };
+    head.opt.update = headaudio.update.bind(headaudio);
+
+    if (head.audioCtx.state === "suspended") await head.audioCtx.resume();
+
+    startSpeakLoop();  // empezar a escuchar la cola de audio del servidor
+
+    setStatus("✅ Avatar listo. Hablará cuando reciba audio. (También puedes probar el micrófono.)");
+    el.mic.disabled = false;
+  } catch (e) {
+    console.error(e);
+    setStatus("Error: " + (e && e.message ? e.message : e), true);
+    el.start.disabled = false;
+  }
+};
+
+// ── Cola de audio: el servidor (Python/Piper) manda WAVs; los reproducimos ──
+let lastGen = null;
+const playedIds = new Set();
+let currentMood = null;
+const MOOD = { neutral:"neutral", happy:"happy", thinking:"neutral",
+               sad:"sad", alert:"fear", sleep:"sleep" };
+
+function applyMood(emo) {
+  const m = MOOD[emo] || "neutral";
+  if (m !== currentMood) { currentMood = m; try { head.setMood(m); } catch(e){} }
+}
+
+async function playClip(id, url) {
+  try {
+    log("recibiendo audio " + id);
+    const buf = await (await fetch(url, {cache:"no-store"})).arrayBuffer();
+    const audio = await head.audioCtx.decodeAudioData(buf);
+    enqueueBuffer(audio, id);
+  } catch (e) { log("playClip " + id + " ERROR: " + (e.message || e)); }
+}
+
+// Reproductor secuencial. El audio va DIRECTO a HeadAudio (como el micrófono,
+// que sí movía los labios) y a los altavoces. NO usamos head.speakAudio porque
+// su animación interna pisa los visemas de HeadAudio.
+let audioQueue = [];
+let currentSrc = null;
+function enqueueBuffer(buffer, id) {
+  audioQueue.push({ buffer, id });
+  pumpAudio();
+}
+function pumpAudio() {
+  if (currentSrc || !audioQueue.length) return;
+  const { buffer, id } = audioQueue.shift();
+  const src = head.audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(headaudio);                   // → detección de visemas → labios
+  src.connect(head.audioCtx.destination);   // → altavoces
+  src.onended = () => { currentSrc = null; pumpAudio(); };
+  currentSrc = src;
+  src.start();
+  log("reproduciendo audio " + id + " (" + buffer.duration.toFixed(1) + "s)");
+}
+function stopAllAudio() {                    // barge-in
+  audioQueue = [];
+  if (currentSrc) { try { currentSrc.stop(); } catch(e){} currentSrc = null; }
+}
+
+function startSpeakLoop() {
+  setInterval(async () => {
+    try {
+      const s = await (await fetch("/state", {cache:"no-store"})).json();
+      if (lastGen === null) lastGen = s.gen;
+      if (s.gen !== lastGen) {           // barge-in: Sparky debe callarse
+        lastGen = s.gen;
+        stopAllAudio();
+      }
+      if (s.emotion) applyMood(s.emotion);
+      for (const clip of (s.audio || [])) {
+        if (playedIds.has(clip.id)) continue;
+        playedIds.add(clip.id);          // marcar antes del await (evita doble fetch)
+        playClip(clip.id, clip.url);
+      }
+    } catch (e) { /* servidor ocupado */ }
+  }, 150);
+}
+
+el.mic.onclick = async () => {
+  try {
+    if (head.audioCtx.state === "suspended") await head.audioCtx.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const micSource = head.audioCtx.createMediaStreamSource(stream);
+    micSource.connect(headaudio);
+    el.mic.disabled = true;
+    el.mic.textContent = "🎤 Escuchando… habla";
+    setStatus("Habla ahora. Si los labios del avatar se mueven con tu voz, el lip-sync funciona.");
+  } catch (e) {
+    console.error(e);
+    setStatus("No se pudo abrir el micrófono: " + (e.message || e), true);
+  }
+};
+
+// ── Auto-arranque (sin tener que pulsar Iniciar) ──
+window.addEventListener("load", () => { el.start.click(); });
+
+// En pestaña normal el audio puede estar bloqueado hasta un gesto: reactivarlo
+["click", "touchstart", "keydown"].forEach((ev) =>
+  document.addEventListener(ev, () => {
+    if (head && head.audioCtx && head.audioCtx.state === "suspended") head.audioCtx.resume();
+  }));
+</script>
+</body>
+</html>

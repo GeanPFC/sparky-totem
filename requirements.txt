@@ -1,0 +1,10 @@
+ollama
+pyttsx3
+rich
+requests
+sounddevice
+numpy
+faster-whisper
+realtimestt
+realtimetts[system]
+audioop-lts

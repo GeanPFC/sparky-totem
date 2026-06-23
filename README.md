@@ -1,0 +1,67 @@
+# Sparky — Tótem conversacional con avatar IA
+
+Asistente virtual presencial para una pantalla vertical: la persona se acerca,
+habla por voz y un **avatar humano 3D** le responde con voz natural en español,
+moviendo los labios sincronizados con el audio.
+
+## Arquitectura
+
+```
+Micrófono → STT (RealtimeSTT/Whisper) → Cerebro (LLM nube/local) → Voz (Piper TTS)
+                                                                        │
+                                          Avatar 3D en navegador ←──────┘
+                                  (TalkingHead.js + HeadAudio = lip-sync)
+```
+
+- **Cascada optimizada** (no speech-to-speech) para latencia ~1 s, gratis y offline.
+- El audio de Piper se reproduce en el **navegador**, donde HeadAudio detecta los
+  visemas del audio y mueve los labios (independiente del idioma).
+
+### Módulos (`sparky/`)
+| Archivo | Rol |
+|---|---|
+| `listener.py` | Escucha por micrófono (RealtimeSTT + faster-whisper) con barge-in |
+| `brain.py` | LLM híbrido: nube NVIDIA → fallback Ollama local, streaming por oraciones |
+| `voice.py` | Piper TTS (proceso caliente); enruta el audio al navegador o al altavoz |
+| `avatar.py` | Servidor http.server: sirve el avatar y la cola de audio |
+| `avatar3d.html` | Avatar humano 3D (TalkingHead.js + HeadAudio) con lip-sync |
+| `avatar.html` | Cara 2D estilizada (alternativa, `AVATAR_3D=False`) |
+| `emotions.py` / `memory.py` | Emociones y memoria persistente |
+
+## Requisitos
+
+- Python 3.13, Windows
+- [Ollama](https://ollama.com) con `llama3.2:1b` (fallback local)
+- **Piper TTS** + voz `es_MX-ald-medium` en `piper/piper/` (binarios incluidos)
+- Una clave de la [API de NVIDIA](https://build.nvidia.com) (modelo en la nube)
+
+## Configuración
+
+```bash
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+
+# Clave de NVIDIA (no se versiona):
+copy sparky\secrets.example.py sparky\secrets.py
+# …y edita sparky/secrets.py con tu clave.
+```
+
+Ajustes en `sparky/config.py`: `AVATAR_3D`, `TOTEM_MODE`, modelos, latencia, etc.
+
+## Uso
+
+```bash
+venv\Scripts\python main.py
+```
+Abre **http://127.0.0.1:8730/3d** (o se abre solo en kiosko). En modo tótem
+escucha sola tras saludar: habla y el avatar te responde.
+
+Pruebas:
+- `test_avatar3d.py` — el avatar habla en bucle (demo de voz + lip-sync)
+- `test_voice.py` — latencia del TTS · `test_avatar.py` — cara 2D
+
+## Pendientes
+
+- Cancelación de eco mic↔altavoz (usar auriculares mientras tanto)
+- Empaquetado offline de los JS/modelo del avatar (hoy por CDN)
+- Detección de presencia · elección del rostro final

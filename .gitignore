@@ -1,0 +1,21 @@
+# Entorno virtual
+venv/
+
+# Caché de Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Audio temporal del TTS
+tmp_tts/
+
+# Secretos (claves API) — NUNCA subir
+sparky/secrets.py
+
+# Config local de herramientas/editor
+.claude/
+
+# Zip redundante de Piper (la versión extraída vive en piper/piper/)
+piper/piper.zip

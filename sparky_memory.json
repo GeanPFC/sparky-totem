@@ -1,0 +1,10 @@
+{
+  "nombre_usuario": "Anthony",
+  "proyecto": "Construir un robot asistente conversacional llamado Sparky",
+  "preferencias": [
+    "Quiere que Sparky converse de forma fluida",
+    "Prefiere explicaciones paso a paso",
+    "Primero quiere priorizar la conversación antes del cuerpo físico",
+    "quiero que hables de forma breve y natural"
+  ]
+}

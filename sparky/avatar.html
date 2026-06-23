@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Sparky</title>
+<style>
+  :root{
+    --accent:#2dd4ff;          /* color de acento (cambia por emoción) */
+    --glow:rgba(45,212,255,.55);
+    --eye:#eafdff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;cursor:none}
+  body{
+    background:radial-gradient(circle at 50% 38%, #14233a 0%, #0a1120 60%, #05080f 100%);
+    font-family:'Segoe UI',system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center;
+    transition:background .8s ease;
+  }
+
+  .stage{display:flex;flex-direction:column;align-items:center;gap:6vh}
+
+  /* ── Halo / aura que respira y pulsa al hablar ── */
+  .face-wrap{position:relative;display:flex;align-items:center;justify-content:center}
+  .halo{
+    position:absolute;width:78vmin;height:78vmin;border-radius:50%;
+    background:radial-gradient(circle, var(--glow) 0%, transparent 62%);
+    filter:blur(6px);opacity:.5;
+    animation:breathe 4.5s ease-in-out infinite;
+    transition:background .8s ease;
+  }
+  .avatar.speaking .halo{animation:pulse .5s ease-in-out infinite}
+
+  /* ── Cara ── */
+  .face{
+    position:relative;width:58vmin;height:58vmin;border-radius:34% 34% 40% 40%;
+    background:linear-gradient(160deg,#1b2c47,#0e1830);
+    box-shadow:0 0 0 .5vmin rgba(255,255,255,.04),
+               inset 0 2vmin 6vmin rgba(0,0,0,.5),
+               0 0 14vmin var(--glow);
+    transition:box-shadow .8s ease;
+  }
+
+  /* ── Ojos ── */
+  .eyes{position:absolute;top:34%;left:0;right:0;display:flex;justify-content:center;gap:11vmin}
+  .eye{
+    position:relative;width:11vmin;height:11vmin;border-radius:50%;
+    background:radial-gradient(circle at 50% 40%, #ffffff 0%, var(--eye) 35%, var(--accent) 120%);
+    box-shadow:0 0 4vmin var(--glow);
+    transition:all .35s ease;
+    animation:blink 5.2s infinite;
+  }
+  .eye::after{ /* brillo */
+    content:"";position:absolute;top:18%;left:22%;width:26%;height:26%;
+    border-radius:50%;background:#fff;opacity:.9;
+  }
+  /* cejas */
+  .brow{
+    position:absolute;top:-3.5vmin;left:8%;width:84%;height:1.6vmin;border-radius:1vmin;
+    background:var(--accent);opacity:0;transition:all .35s ease;
+  }
+
+  /* ── Boca ── */
+  .mouth{
+    position:absolute;left:50%;top:64%;transform:translateX(-50%);
+    width:18vmin;height:3vmin;border-radius:2vmin;
+    background:var(--accent);box-shadow:0 0 3vmin var(--glow);
+    transition:height .3s ease,width .3s ease,border-radius .3s ease,top .3s ease;
+  }
+
+  /* ── Nombre / estado ── */
+  .name{color:var(--accent);font-size:5vmin;font-weight:300;letter-spacing:.4vmin;
+        opacity:.9;transition:color .8s ease;text-shadow:0 0 3vmin var(--glow)}
+
+  /* ════════ EMOCIONES ════════ */
+  /* neutral: por defecto, leve sonrisa */
+  .avatar .mouth{border-radius:0 0 2vmin 2vmin;height:2.4vmin;width:16vmin}
+
+  /* happy */
+  .emo-happy{--accent:#36e07a;--glow:rgba(54,224,122,.55)}
+  .emo-happy .mouth{height:9vmin;width:22vmin;border-radius:0 0 11vmin 11vmin;top:58%}
+  .emo-happy .eye{height:8vmin;border-radius:50% 50% 50% 50%/70% 70% 30% 30%}
+
+  /* thinking */
+  .emo-thinking{--accent:#f3c34a;--glow:rgba(243,195,74,.5)}
+  .emo-thinking .mouth{width:7vmin;height:2.4vmin;border-radius:2vmin;left:42%}
+  .emo-thinking .eyes{transform:translateY(-1.5vmin)}
+  .emo-thinking .brow{opacity:.85}
+  .emo-thinking .eye:first-child .brow{transform:rotate(-12deg) translateY(-1vmin)}
+
+  /* sad */
+  .emo-sad{--accent:#5aa6ff;--glow:rgba(90,166,255,.5)}
+  .emo-sad .mouth{height:8vmin;width:18vmin;border-radius:11vmin 11vmin 0 0;top:70%}
+  .emo-sad .brow{opacity:.8}
+  .emo-sad .eye:first-child .brow{transform:rotate(14deg)}
+  .emo-sad .eye:last-child .brow{transform:rotate(-14deg)}
+
+  /* alert */
+  .emo-alert{--accent:#ff5d5d;--glow:rgba(255,93,93,.6)}
+  .emo-alert .eye{width:13vmin;height:13vmin}
+  .emo-alert .mouth{width:8vmin;height:8vmin;border-radius:50%}
+  .emo-alert .brow{opacity:.9;transform:translateY(-1.5vmin)}
+
+  /* sleep */
+  .emo-sleep{--accent:#8a93a8;--glow:rgba(138,147,168,.35)}
+  .emo-sleep .eye{height:1.6vmin;animation:none;border-radius:1vmin}
+  .emo-sleep .eye::after{opacity:0}
+  .emo-sleep .mouth{width:5vmin;height:2vmin}
+
+  /* ── Hablando: la boca se mueve (override de la emoción) ── */
+  .avatar.speaking .mouth{animation:talk .26s ease-in-out infinite alternate;border-radius:3vmin}
+  .avatar.speaking.emo-sleep .eye{height:11vmin;animation:blink 5.2s infinite} /* despierta al hablar */
+
+  /* ════════ ANIMACIONES ════════ */
+  @keyframes blink{0%,92%,100%{transform:scaleY(1)}96%{transform:scaleY(.08)}}
+  @keyframes breathe{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:.65;transform:scale(1.05)}}
+  @keyframes pulse{0%,100%{opacity:.55;transform:scale(1.02)}50%{opacity:.95;transform:scale(1.12)}}
+  @keyframes talk{
+    0%{height:2.5vmin;width:14vmin}
+    50%{height:7vmin;width:11vmin}
+    100%{height:11vmin;width:13vmin}
+  }
+</style>
+</head>
+<body>
+  <div class="stage avatar emo-neutral" id="avatar">
+    <div class="face-wrap">
+      <div class="halo"></div>
+      <div class="face">
+        <div class="eyes">
+          <div class="eye"><div class="brow"></div></div>
+          <div class="eye"><div class="brow"></div></div>
+        </div>
+        <div class="mouth"></div>
+      </div>
+    </div>
+    <div class="name" id="name">Sparky</div>
+  </div>
+
+<script>
+  const root = document.getElementById('avatar');
+  const nameEl = document.getElementById('name');
+  const EMO = ['neutral','happy','thinking','sad','alert','sleep'];
+
+  async function poll(){
+    try{
+      const r = await fetch('/state', {cache:'no-store'});
+      const s = await r.json();
+      EMO.forEach(e => root.classList.toggle('emo-'+e, s.emotion === e));
+      root.classList.toggle('speaking', !!s.speaking);
+      if(s.name && nameEl.textContent !== s.name) nameEl.textContent = s.name;
+    }catch(e){ /* servidor aún no listo */ }
+  }
+  setInterval(poll, 120);
+  poll();
+</script>
+</body>
+</html>
