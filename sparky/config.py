@@ -25,7 +25,7 @@ except ImportError:
 CLOUD_MODEL = "meta/llama-3.1-8b-instruct"
 CLOUD_MAX_TOKENS = 200
 CLOUD_TEMPERATURE = 0.7
-CLOUD_TIMEOUT = 5                   # ponytail: 5s acota el peor caso antes de caer a local (antes 15)
+CLOUD_TIMEOUT = 20                  # el endpoint gratis a veces tarda en el 1er token; 5s era muy corto
 
 # ── Conversación ──────────────────────────────────────────────
 MAX_HISTORY_MESSAGES = 4
