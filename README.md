@@ -60,8 +60,15 @@ Pruebas:
 - `test_avatar3d.py` — el avatar habla en bucle (demo de voz + lip-sync)
 - `test_voice.py` — latencia del TTS · `test_avatar.py` — cara 2D
 
-## Pendientes
+## Notas de uso
 
-- Cancelación de eco mic↔altavoz (usar auriculares mientras tanto)
-- Empaquetado offline de los JS/modelo del avatar (hoy por CDN)
-- Detección de presencia · elección del rostro final
+- **Eco mic↔altavoz**: resuelto por turnos (se vacía el buffer antes de escuchar).
+  Para permitir interrumpir a Sparky mientras habla, usa auriculares o un micrófono
+  con cancelación de eco y pon `BARGE_IN = True` en `config.py`.
+- El avatar carga sus librerías por **CDN** (necesita internet). Empaquetado
+  offline: pendiente, añadir si el tótem irá sin red.
+
+## Pendientes (opcionales)
+
+- Empaquetado offline de los JS/modelo del avatar
+- Detección de presencia · elección del rostro final del avatar

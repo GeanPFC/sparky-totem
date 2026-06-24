@@ -14,7 +14,7 @@ Auto-recuperación:
 import logging
 import time
 from rich import print as rprint
-from sparky.config import STT_MODEL, STT_LANGUAGE
+from sparky.config import STT_MODEL, STT_LANGUAGE, BARGE_IN
 
 
 class SparkyListener:
@@ -33,7 +33,7 @@ class SparkyListener:
         """Callback: se dispara cuando el usuario empieza a hablar.
         Si Sparky está hablando, lo para (barge-in).
         """
-        if self._voice and self._voice.is_speaking:
+        if BARGE_IN and self._voice and self._voice.is_speaking:
             rprint("\n[bold red]⚡ Interrumpido![/bold red]")
             self._voice.stop_speaking()
 
@@ -115,6 +115,13 @@ class SparkyListener:
         automáticamente y vuelve a escuchar.
         """
         self._ensure_recorder()
+
+        # Vaciar lo captado durante el turno anterior (ej. la propia voz de
+        # Sparky por el altavoz). Conversación por turnos = sin eco.
+        try:
+            self._recorder.clear_audio_queue()
+        except Exception:
+            pass
 
         rprint("[bold green]🎤 Escuchando...[/bold green]")
 

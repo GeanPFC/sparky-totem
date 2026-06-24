@@ -56,6 +56,8 @@ AVATAR_PORT = 8730
 AVATAR_KIOSK = True                 # abrir Chrome en modo kiosko (pantalla completa)
 AVATAR_3D = True                    # True: avatar humano 3D (/3d, audio en navegador); False: cara 2D
 TOTEM_MODE = True                   # True: escucha sola por micrófono (sin pulsar Enter)
+BARGE_IN = False                    # ponytail: False evita autointerrupción por eco de altavoz.
+                                    # Ponlo True solo con auriculares o micrófono con cancelación de eco.
 
 # ── Identidad de Sparky ───────────────────────────────────────
 SPARKY_NAME = "Sparky"
