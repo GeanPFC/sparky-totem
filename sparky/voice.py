@@ -84,7 +84,8 @@ class SparkyVoice:
             self._clean_tmp()
             rprint("[dim]Voz: Piper TTS (neural, proceso caliente)[/dim]")
             self._ensure_piper()  # precargar el modelo al arrancar
-            self._make_fillers()  # pregenerar muletillas para tapar latencia
+            if not self._use_azure:           # con Azure NO usamos fillers (voz Piper vieja)
+                self._make_fillers()
         else:
             self.engine_name = "pyttsx3"
             rprint("[dim]Voz: pyttsx3 (fallback)[/dim]")

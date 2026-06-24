@@ -77,7 +77,8 @@ class SparkyListener:
             min_length_of_recording=0.3,
             min_gap_between_recordings=0.1,
 
-            # Callbacks para barge-in
+            # Callbacks para barge-in (vad_detect_start dispara al instante de oír voz)
+            on_vad_detect_start=self._on_recording_start,
             on_recording_start=self._on_recording_start,
             on_recording_stop=self._on_recording_stop,
 
