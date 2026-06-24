@@ -82,6 +82,7 @@ el.start.onclick = async () => {
       modelFPS: 30,                // 30 fps para hardware modesto (GT 710)
       mixerGainSpeech: 3,
     });
+    window.TH = head;              // exponer para depuración
 
     setStatus("Cargando avatar humano… (puede tardar la 1ª vez)");
     await head.showAvatar({
@@ -141,9 +142,7 @@ async function playClip(id, url) {
     const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
     const audio = await head.audioCtx.decodeAudioData(bytes.buffer);
     if (data.visemes && data.visemes.length) {
-      // Azure: lip-sync EXACTO por visemas (TalkingHead reproduce y anima)
-      head.speakAudio({ audio, visemes: data.visemes, vtimes: data.vtimes, vdurations: data.vdurations });
-      log("hablando " + id + " con " + data.visemes.length + " visemas");
+      enqueueAzure(audio, data.visemes, data.vtimes, id);  // labios EXACTOS por visemas
     } else {
       enqueueBuffer(audio, id);  // Piper: lip-sync aproximado por HeadAudio
     }
@@ -176,6 +175,48 @@ function stopAllAudio() {                    // barge-in
   if (currentSrc) { try { currentSrc.stop(); } catch(e){} currentSrc = null; }
 }
 
+// ── Reproductor Azure: audio + visemas EXACTOS (animados a mano vía mtAvatar) ──
+const ALL_VIS = ["aa","E","I","O","U","PP","SS","TH","CH","FF","kk","nn","RR","DD","sil"];
+function setViseme(name) {
+  for (const v of ALL_VIS) {
+    const o = head.mtAvatar["viseme_" + v];
+    if (o) Object.assign(o, { newvalue: (v === name ? 0.9 : 0), needsUpdate: true });
+  }
+}
+let azQueue = [], azBusy = false, azSrc = null;
+function enqueueAzure(buffer, visemes, vtimes, id) {
+  azQueue.push({ buffer, visemes, vtimes, id });
+  pumpAzure();
+}
+function pumpAzure() {
+  if (azBusy || !azQueue.length) return;
+  azBusy = true;
+  const { buffer, visemes, vtimes, id } = azQueue.shift();
+  const src = head.audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(head.audioCtx.destination);
+  azSrc = src;
+  const start = head.audioCtx.currentTime;
+  let i = 0, cur = "sil";
+  function tick() {
+    if (azSrc !== src) return;                 // cancelado (barge-in)
+    const el = (head.audioCtx.currentTime - start) * 1000;
+    while (i < vtimes.length && vtimes[i] <= el) { cur = visemes[i]; i++; }
+    setViseme(cur);
+    if (el < buffer.duration * 1000 + 150) requestAnimationFrame(tick);
+    else setViseme("sil");
+  }
+  src.onended = () => { if (azSrc === src) azSrc = null; azBusy = false; setViseme("sil"); pumpAzure(); };
+  src.start();
+  log("hablando " + id + " con " + visemes.length + " visemas");
+  requestAnimationFrame(tick);
+}
+function stopAzure() {                         // barge-in
+  azQueue = [];
+  if (azSrc) { try { azSrc.stop(); } catch(e){} azSrc = null; }
+  azBusy = false; setViseme("sil");
+}
+
 function startSpeakLoop() {
   setInterval(async () => {
     try {
@@ -183,8 +224,9 @@ function startSpeakLoop() {
       if (lastGen === null) lastGen = s.gen;
       if (s.gen !== lastGen) {           // barge-in: Sparky debe callarse
         lastGen = s.gen;
+        stopAzure();                     // Azure (audio + visemas)
         stopAllAudio();                  // Piper (buffer-source)
-        try { head.stopSpeaking(); } catch(e){}  // Azure (speakAudio)
+        try { head.stopSpeaking(); } catch(e){}
       }
       if (s.emotion) applyMood(s.emotion);
       for (const clip of (s.audio || [])) {
