@@ -47,7 +47,7 @@ FILLER_ENABLED = True
 FILLER_PHRASES = ["Mmm,", "A ver,", "Déjame ver,"]
 
 # ── Chatterbox TTS (NVIDIA Riva gRPC) ────────────────────────
-TTS_ENGINE = "riva"                # "piper" (local, gratis) | "riva" (Chatterbox, voz natural por API)
+TTS_ENGINE = "piper"               # "piper" (local, gratis) | "riva" (Chatterbox; requiere function-id habilitado en tu cuenta)
 RIVA_SERVER = "grpc.nvcf.nvidia.com:443"
 RIVA_FUNCTION_ID = "ddacc747-1269-4fab-bfd9-8f593dead106"  # chatterbox-multilingual-tts
 RIVA_VOICE = "Chatterbox-Multilingual.es-US.Female"  # conjetura; confirma el real con list_voices.py
