@@ -145,7 +145,15 @@ class SparkyAvatar:
                 except Exception:
                     pass
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", AVATAR_PORT), Handler)
+        # En Windows, SO_REUSEADDR deja que DOS servidores tomen el mismo puerto
+        # y el navegador se engancha al fantasma. Lo desactivamos para fallar claro.
+        ThreadingHTTPServer.allow_reuse_address = False
+        try:
+            self._server = ThreadingHTTPServer(("127.0.0.1", AVATAR_PORT), Handler)
+        except OSError:
+            rprint(f"[bold red]Puerto {AVATAR_PORT} ya ocupado por otro Sparky.[/bold red]")
+            rprint("[yellow]Cierra los 'python' viejos (Administrador de tareas) y reinicia.[/yellow]")
+            return
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
         url = f"http://127.0.0.1:{AVATAR_PORT}/" + ("3d" if AVATAR_3D else "")
