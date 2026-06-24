@@ -19,6 +19,7 @@ Barge-in:
 """
 
 import os
+import io
 import glob
 import json
 import time
@@ -33,6 +34,8 @@ from rich import print as rprint
 from sparky.config import (
     VOICE_ENABLED, VOICE_RATE, PIPER_EXE, PIPER_MODEL,
     PIPER_SENTENCE_SILENCE, PIPER_TMP, FILLER_ENABLED, FILLER_PHRASES, AVATAR_3D,
+    TTS_ENGINE, RIVA_SERVER, RIVA_FUNCTION_ID, RIVA_VOICE, RIVA_LANGUAGE,
+    RIVA_SAMPLE_RATE, CLOUD_API_KEY,
 )
 
 
@@ -58,6 +61,10 @@ class SparkyVoice:
         # Modo 3D: el audio se reproduce en el navegador (para lip-sync HeadAudio)
         self._avatar = None
         self._speech_end = 0.0                # instante estimado de fin de habla (modo navegador)
+
+        # Chatterbox vía NVIDIA Riva (voz natural). Si falla, cae a Piper.
+        self._riva = None                     # servicio Riva (lazy)
+        self._use_riva = (TTS_ENGINE == "riva")
 
         if PIPER_EXE.exists() and PIPER_MODEL.exists():
             self.engine_name = "piper"
@@ -179,6 +186,66 @@ class SparkyVoice:
         else:
             self._play_file(path)
 
+    # ── Chatterbox vía NVIDIA Riva (gRPC) ────────────────────
+
+    def _riva_service(self):
+        if self._riva is None:
+            import riva.client  # dep: nvidia-riva-client
+            auth = riva.client.Auth(
+                uri=RIVA_SERVER, use_ssl=True,
+                metadata_args=[
+                    ["function-id", RIVA_FUNCTION_ID],
+                    ["authorization", "Bearer " + CLOUD_API_KEY],
+                ],
+            )
+            self._riva = riva.client.SpeechSynthesisService(auth)
+        return self._riva
+
+    def _synth_riva(self, text):
+        """Sintetiza con Chatterbox. Devuelve bytes WAV, o None si falla (→ Piper)."""
+        try:
+            import riva.client
+            resp = self._riva_service().synthesize(
+                text, voice_name=RIVA_VOICE, language_code=RIVA_LANGUAGE,
+                encoding=riva.client.AudioEncoding.LINEAR_PCM,
+                sample_rate_hz=RIVA_SAMPLE_RATE,
+            )
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(RIVA_SAMPLE_RATE)
+                wf.writeframes(resp.audio)
+            return buf.getvalue()
+        except Exception as e:
+            rprint(f"[dim yellow]Chatterbox/Riva falló ({e}); usando Piper[/dim yellow]")
+            self._use_riva = False  # no reintentar el resto de la sesión
+            return None
+
+    def _emit_bytes(self, wav_bytes):
+        """Saca un WAV en memoria: al navegador (3D) o por altavoz (2D)."""
+        if self._stop_flag.is_set() or not wav_bytes:
+            return
+        if self._to_browser:
+            self._avatar.push_audio(wav_bytes)
+            self._speech_end = max(self._speech_end, time.time()) + self._wav_dur_bytes(wav_bytes)
+        else:
+            try:
+                with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+                    rate = wf.getframerate()
+                    frames = wf.readframes(wf.getnframes())
+                sd.play(np.frombuffer(frames, dtype=np.int16), samplerate=rate)
+                sd.wait()
+            except Exception:
+                pass
+
+    def _wav_dur_bytes(self, wav_bytes):
+        try:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+                return wf.getnframes() / float(wf.getframerate())
+        except Exception:
+            return 1.5
+
     def _clean_tmp(self):
         for f in glob.glob(str(PIPER_TMP / "*.wav")):
             try:
@@ -217,7 +284,17 @@ class SparkyVoice:
         self._stop_flag.clear()
         self._speech_end = 0.0
         try:
-            if self.engine_name == "piper":
+            if self._use_riva:
+                wav = self._synth_riva(text)
+                if wav:
+                    self._emit_bytes(wav)
+                    self._wait_browser_done()
+                elif self.engine_name == "piper":      # Riva falló → Piper
+                    path = self._synth(text)
+                    if self._wait_ready(path):
+                        self._emit(path)
+                        self._wait_browser_done()
+            elif self.engine_name == "piper":
                 path = self._synth(text)
                 if self._wait_ready(path):
                     self._emit(path)
@@ -257,11 +334,13 @@ class SparkyVoice:
         """Encola una oración: inicia su síntesis YA y la pone en cola de reproducción."""
         if self.interrupted.is_set() or not sentence.strip():
             return
-        if self.engine_name == "piper":
-            path = self._synth(sentence.strip())
-            self._play_queue.put(path)
+        s = sentence.strip()
+        if self._use_riva:
+            self._play_queue.put(("riva", s))          # se sintetiza en el worker
+        elif self.engine_name == "piper":
+            self._play_queue.put(self._synth(s))       # ruta del WAV (síntesis ya iniciada)
         else:
-            self._play_queue.put(("pyttsx3", sentence.strip()))
+            self._play_queue.put(("pyttsx3", s))
 
     def finish_speaking(self):
         """Señala fin de oraciones y espera a que termine la reproducción."""
@@ -325,8 +404,17 @@ class SparkyVoice:
             if self._stop_flag.is_set():
                 break
             try:
-                if isinstance(item, tuple):       # fallback pyttsx3
-                    self._pyttsx3_speak(item[1])
+                if isinstance(item, tuple):
+                    if item[0] == "riva":
+                        wav = self._synth_riva(item[1])
+                        if wav:
+                            self._emit_bytes(wav)
+                        else:                          # Riva falló → Piper
+                            path = self._synth(item[1])
+                            if self._wait_ready(path):
+                                self._emit(path)
+                    else:                              # fallback pyttsx3
+                        self._pyttsx3_speak(item[1])
                 else:
                     if self._wait_ready(item):
                         self._emit(item)

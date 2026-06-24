@@ -8,3 +8,4 @@ faster-whisper
 realtimestt
 realtimetts[system]
 audioop-lts
+nvidia-riva-client
