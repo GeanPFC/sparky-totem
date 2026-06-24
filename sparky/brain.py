@@ -12,7 +12,7 @@ import requests
 from ollama import chat
 from rich import print as rprint
 from sparky.config import (
-    LOCAL_MODEL, LOCAL_OPTIONS, MAX_HISTORY_MESSAGES,
+    LOCAL_MODEL, LOCAL_OPTIONS, LOCAL_ENABLED, MAX_HISTORY_MESSAGES,
     CLOUD_ENABLED, CLOUD_API_URL, CLOUD_API_KEY,
     CLOUD_MODEL, CLOUD_MAX_TOKENS, CLOUD_TEMPERATURE, CLOUD_TIMEOUT,
 )
@@ -69,12 +69,15 @@ class SparkyBrain:
             voice.start_speaking()
             voice.play_filler()  # muletilla instantánea mientras llega el 1er token
 
-        # Intentar nube primero
+        # 1) Nube con streaming (baja latencia)
         if CLOUD_ENABLED:
             raw_response, elapsed = self._think_cloud(messages, voice)
+            # 2) Si el streaming falla, reintentar SIN streaming (más robusto, todo API)
+            if raw_response is None:
+                raw_response, elapsed = self._think_cloud_nonstream(messages, voice)
 
-        # Fallback a local
-        if raw_response is None:
+        # 3) Fallback local (Ollama) solo si está habilitado — por defecto NO
+        if raw_response is None and LOCAL_ENABLED:
             raw_response, elapsed = self._think_local(messages, voice)
 
         # Señalar fin de oraciones al TTS
@@ -203,7 +206,41 @@ class SparkyBrain:
             rprint(f"\n[dim yellow]Sin internet, usando local...[/dim yellow]")
             return None, 0
         except Exception as e:
-            rprint(f"\n[dim yellow]Error nube: {e}, usando local...[/dim yellow]")
+            rprint(f"\n[dim yellow]Error nube: {e}, reintento sin streaming...[/dim yellow]")
+            return None, 0
+
+    # ── Motor: NVIDIA Cloud SIN streaming (respaldo robusto) ──
+
+    def _think_cloud_nonstream(self, messages, voice=None):
+        """Respaldo cuando el streaming SSE falla. Pide la respuesta completa
+        (probado que funciona) y la envía a la voz por oraciones."""
+        start = time.time()
+        try:
+            rprint("[dim][ nube-2 ][/dim] ", end="")
+            resp = requests.post(
+                CLOUD_API_URL,
+                headers={"Authorization": f"Bearer {CLOUD_API_KEY}",
+                         "Accept": "application/json"},
+                json={"model": CLOUD_MODEL, "messages": messages,
+                      "max_tokens": CLOUD_MAX_TOKENS, "temperature": CLOUD_TEMPERATURE,
+                      "top_p": 0.95},
+                timeout=CLOUD_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                rprint(f"[dim yellow]Nube-2 HTTP {resp.status_code}: {resp.text[:150]}[/dim yellow]")
+                return None, 0
+            text = resp.json()["choices"][0]["message"]["content"]
+            rprint(f"[bold cyan]Sparky:[/bold cyan] {text}")
+            self._detect_emotion_live(text)
+            if voice and voice.enabled:
+                for s in re.split(r'(?<=[.!?;:])\s+', text):
+                    clean = re.sub(r'^\[(?:neutral|happy|thinking|sad|alert|sleep)\]\s*', '', s)
+                    if clean.strip():
+                        voice.queue_sentence(clean.strip())
+            self.last_engine = "nube-2"
+            return text, round(time.time() - start, 2)
+        except Exception as e:
+            rprint(f"[dim yellow]Nube-2 error: {e}[/dim yellow]")
             return None, 0
 
     # ── Motor: Ollama Local ──────────────────────────────────

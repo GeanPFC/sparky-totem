@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 # ── Modelo LOCAL (Ollama) ─────────────────────────────────────
+LOCAL_ENABLED = False              # full-API: NO usar Ollama local (la PC no corre modelos locales)
 LOCAL_MODEL = "llama3.2:1b"
 LOCAL_OPTIONS = {
     "num_predict": 150,
