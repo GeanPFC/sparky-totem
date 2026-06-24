@@ -63,7 +63,7 @@ window.addEventListener("error", (e) =>
 window.addEventListener("unhandledrejection", (e) =>
   setStatus("Promesa rechazada: " + ((e.reason && e.reason.message) || e.reason), true));
 
-let head, headaudio;
+let head, headaudio, ttsEngine = "piper";
 
 el.start.onclick = async () => {
   el.start.disabled = true;
@@ -91,26 +91,30 @@ el.start.onclick = async () => {
       lipsyncLang: "en",           // irrelevante: el movimiento viene del audio
     });
 
-    setStatus("Cargando motor de lip-sync (HeadAudio)…");
-    await head.audioCtx.audioWorklet.addModule(HEADAUDIO + "/modules/headworklet.mjs");
-    headaudio = new HeadAudio(head.audioCtx, {
-      processorOptions: { vadEventsEnabled: true, visemeEventsEnabled: true },
-      parameterData: { vadMode: 1 },
-    });
-    await headaudio.loadModel(HEADAUDIO + "/dist/model-en-mixed.bin");
+    // ¿Qué motor TTS? Azure trae visemas exactos (no necesita HeadAudio).
+    const st0 = await (await fetch("/state", {cache:"no-store"})).json();
+    ttsEngine = st0.tts || "piper";
 
-    // Los visemas detectados mueven los morph targets del avatar
-    headaudio.onvalue = (key, value) => {
-      Object.assign(head.mtAvatar[key], { newvalue: value, needsUpdate: true });
-    };
-    head.opt.update = headaudio.update.bind(headaudio);
+    if (ttsEngine !== "azure") {
+      setStatus("Cargando motor de lip-sync (HeadAudio)…");
+      await head.audioCtx.audioWorklet.addModule(HEADAUDIO + "/modules/headworklet.mjs");
+      headaudio = new HeadAudio(head.audioCtx, {
+        processorOptions: { vadEventsEnabled: true, visemeEventsEnabled: true },
+        parameterData: { vadMode: 1 },
+      });
+      await headaudio.loadModel(HEADAUDIO + "/dist/model-en-mixed.bin");
+      headaudio.onvalue = (key, value) => {
+        Object.assign(head.mtAvatar[key], { newvalue: value, needsUpdate: true });
+      };
+      head.opt.update = headaudio.update.bind(headaudio);  // solo Piper
+    }
 
     if (head.audioCtx.state === "suspended") await head.audioCtx.resume();
 
     startSpeakLoop();  // empezar a escuchar la cola de audio del servidor
 
-    setStatus("✅ Avatar listo. Hablará cuando reciba audio. (También puedes probar el micrófono.)");
-    el.mic.disabled = false;
+    setStatus("✅ Avatar listo (" + ttsEngine + "). Hablará cuando reciba audio.");
+    el.mic.disabled = (ttsEngine === "azure");  // el mic-test solo aplica a HeadAudio
   } catch (e) {
     console.error(e);
     setStatus("Error: " + (e && e.message ? e.message : e), true);
@@ -133,9 +137,16 @@ function applyMood(emo) {
 async function playClip(id, url) {
   try {
     log("recibiendo audio " + id);
-    const buf = await (await fetch(url, {cache:"no-store"})).arrayBuffer();
-    const audio = await head.audioCtx.decodeAudioData(buf);
-    enqueueBuffer(audio, id);
+    const data = await (await fetch(url, {cache:"no-store"})).json();
+    const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+    const audio = await head.audioCtx.decodeAudioData(bytes.buffer);
+    if (data.visemes && data.visemes.length) {
+      // Azure: lip-sync EXACTO por visemas (TalkingHead reproduce y anima)
+      head.speakAudio({ audio, visemes: data.visemes, vtimes: data.vtimes, vdurations: data.vdurations });
+      log("hablando " + id + " con " + data.visemes.length + " visemas");
+    } else {
+      enqueueBuffer(audio, id);  // Piper: lip-sync aproximado por HeadAudio
+    }
   } catch (e) { log("playClip " + id + " ERROR: " + (e.message || e)); }
 }
 
@@ -172,7 +183,8 @@ function startSpeakLoop() {
       if (lastGen === null) lastGen = s.gen;
       if (s.gen !== lastGen) {           // barge-in: Sparky debe callarse
         lastGen = s.gen;
-        stopAllAudio();
+        stopAllAudio();                  // Piper (buffer-source)
+        try { head.stopSpeaking(); } catch(e){}  // Azure (speakAudio)
       }
       if (s.emotion) applyMood(s.emotion);
       for (const clip of (s.audio || [])) {

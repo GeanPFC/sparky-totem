@@ -36,7 +36,15 @@ from sparky.config import (
     PIPER_SENTENCE_SILENCE, PIPER_TMP, FILLER_ENABLED, FILLER_PHRASES, AVATAR_3D,
     TTS_ENGINE, RIVA_SERVER, RIVA_FUNCTION_ID, RIVA_VOICE, RIVA_LANGUAGE,
     RIVA_SAMPLE_RATE, CLOUD_API_KEY,
+    AZURE_SPEECH_REGION, AZURE_VOICE, AZURE_SPEECH_KEY,
 )
+
+# Visemas de Microsoft (0-21) → visemas Oculus que usa TalkingHead
+_MS2OCU = {
+    0: "sil", 1: "aa", 2: "aa", 3: "O", 4: "E", 5: "E", 6: "I", 7: "U",
+    8: "O", 9: "O", 10: "O", 11: "aa", 12: "kk", 13: "RR", 14: "nn",
+    15: "SS", 16: "CH", 17: "TH", 18: "FF", 19: "DD", 20: "kk", 21: "PP",
+}
 
 
 class SparkyVoice:
@@ -65,6 +73,10 @@ class SparkyVoice:
         # Chatterbox vía NVIDIA Riva (voz natural). Si falla, cae a Piper.
         self._riva = None                     # servicio Riva (lazy)
         self._use_riva = (TTS_ENGINE == "riva")
+
+        # Azure Speech: voz humana + visemas (labios exactos). Si falla, cae a Piper.
+        self._azure = None                    # SpeechSynthesizer (lazy)
+        self._use_azure = (TTS_ENGINE == "azure")
 
         if PIPER_EXE.exists() and PIPER_MODEL.exists():
             self.engine_name = "piper"
@@ -222,12 +234,50 @@ class SparkyVoice:
             self._use_riva = False  # no reintentar el resto de la sesión
             return None
 
-    def _emit_bytes(self, wav_bytes):
-        """Saca un WAV en memoria: al navegador (3D) o por altavoz (2D)."""
+    # ── Azure Speech (voz humana + visemas) ──────────────────
+
+    def _azure_synth(self):
+        if self._azure is None:
+            import azure.cognitiveservices.speech as speechsdk
+            cfg = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+            cfg.speech_synthesis_voice_name = AZURE_VOICE
+            cfg.set_speech_synthesis_output_format(
+                speechsdk.SpeechSynthesisOutputFormat.Riff22050Hz16BitMonoPcm)
+            synth = speechsdk.SpeechSynthesizer(speech_config=cfg, audio_config=None)
+            self._azure_visemes = []
+            synth.viseme_received.connect(
+                lambda evt: self._azure_visemes.append((evt.audio_offset / 10000.0, evt.viseme_id)))
+            self._azure = synth
+        return self._azure
+
+    def _synth_azure(self, text):
+        """Sintetiza con Azure. Devuelve (wav_bytes, {visemes,vtimes,vdurations}) o (None,None)."""
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+            synth = self._azure_synth()
+            self._azure_visemes = []  # reiniciar por frase
+            result = synth.speak_text_async(text).get()
+            if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
+                rprint(f"[dim yellow]Azure TTS no completó ({result.reason}); usando Piper[/dim yellow]")
+                self._use_azure = False
+                return None, None
+            vis = sorted(self._azure_visemes)
+            visemes = [_MS2OCU.get(vid, "sil") for (_t, vid) in vis]
+            vtimes = [t for (t, _vid) in vis]
+            vdur = [(vtimes[i + 1] - vtimes[i]) if i + 1 < len(vtimes) else 120
+                    for i in range(len(vtimes))]
+            return result.audio_data, {"visemes": visemes, "vtimes": vtimes, "vdurations": vdur}
+        except Exception as e:
+            rprint(f"[dim yellow]Azure error ({e}); usando Piper[/dim yellow]")
+            self._use_azure = False
+            return None, None
+
+    def _emit_bytes(self, wav_bytes, visemes=None):
+        """Saca un WAV en memoria (con visemas opcionales): al navegador o al altavoz."""
         if self._stop_flag.is_set() or not wav_bytes:
             return
         if self._to_browser:
-            self._avatar.push_audio(wav_bytes)
+            self._avatar.push_audio(wav_bytes, visemes)
             self._speech_end = max(self._speech_end, time.time()) + self._wav_dur_bytes(wav_bytes)
         else:
             try:
@@ -284,7 +334,17 @@ class SparkyVoice:
         self._stop_flag.clear()
         self._speech_end = 0.0
         try:
-            if self._use_riva:
+            if self._use_azure:
+                wav, vis = self._synth_azure(text)
+                if wav:
+                    self._emit_bytes(wav, vis)
+                    self._wait_browser_done()
+                elif self.engine_name == "piper":      # Azure falló → Piper
+                    path = self._synth(text)
+                    if self._wait_ready(path):
+                        self._emit(path)
+                        self._wait_browser_done()
+            elif self._use_riva:
                 wav = self._synth_riva(text)
                 if wav:
                     self._emit_bytes(wav)
@@ -335,7 +395,9 @@ class SparkyVoice:
         if self.interrupted.is_set() or not sentence.strip():
             return
         s = sentence.strip()
-        if self._use_riva:
+        if self._use_azure:
+            self._play_queue.put(("azure", s))         # se sintetiza en el worker
+        elif self._use_riva:
             self._play_queue.put(("riva", s))          # se sintetiza en el worker
         elif self.engine_name == "piper":
             self._play_queue.put(self._synth(s))       # ruta del WAV (síntesis ya iniciada)
@@ -405,7 +467,15 @@ class SparkyVoice:
                 break
             try:
                 if isinstance(item, tuple):
-                    if item[0] == "riva":
+                    if item[0] == "azure":
+                        wav, vis = self._synth_azure(item[1])
+                        if wav:
+                            self._emit_bytes(wav, vis)
+                        else:                          # Azure falló → Piper
+                            path = self._synth(item[1])
+                            if self._wait_ready(path):
+                                self._emit(path)
+                    elif item[0] == "riva":
                         wav = self._synth_riva(item[1])
                         if wav:
                             self._emit_bytes(wav)

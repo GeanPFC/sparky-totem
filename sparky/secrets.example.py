@@ -8,3 +8,6 @@ Alternativa: define la variable de entorno NVIDIA_API_KEY.
 
 # Clave de la API de NVIDIA (https://build.nvidia.com)
 NVIDIA_API_KEY = "nvapi-PON_TU_CLAVE_AQUI"
+
+# Clave de Azure Speech (portal.azure.com → recurso Speech → Claves y punto de conexión)
+AZURE_SPEECH_KEY = "PON_TU_CLAVE_DE_AZURE_AQUI"

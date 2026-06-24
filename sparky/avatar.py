@@ -21,7 +21,9 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from rich import print as rprint
-from sparky.config import AVATAR_ENABLED, AVATAR_PORT, AVATAR_KIOSK, AVATAR_3D, SPARKY_NAME
+from sparky.config import (
+    AVATAR_ENABLED, AVATAR_PORT, AVATAR_KIOSK, AVATAR_3D, SPARKY_NAME, TTS_ENGINE,
+)
 
 _LOG_FILE = Path(__file__).parent.parent / "avatar.log"
 
@@ -51,12 +53,12 @@ class SparkyAvatar:
 
     # ── Cola de audio (navegador reproduce → HeadAudio lip-sync) ──
 
-    def push_audio(self, wav_bytes):
-        """Encola un WAV para que el navegador lo reproduzca. Devuelve su id."""
+    def push_audio(self, wav_bytes, visemes=None):
+        """Encola un WAV (+ visemas opcionales) para el navegador. Devuelve su id."""
         with self._audio_lock:
             cid = self._next_id
             self._next_id += 1
-            self._audio.append({"id": cid, "data": wav_bytes})
+            self._audio.append({"id": cid, "data": wav_bytes, "visemes": visemes})
             return cid
 
     def cancel_audio(self):
@@ -66,11 +68,11 @@ class SparkyAvatar:
             self._audio.clear()
 
     def take_audio(self, cid):
-        """El navegador descarga un clip: se entrega una vez y se descarta."""
+        """El navegador descarga un clip (dict con data+visemas): se entrega una vez."""
         with self._audio_lock:
             for i, c in enumerate(self._audio):
                 if c["id"] == cid:
-                    return self._audio.pop(i)["data"]
+                    return self._audio.pop(i)
         return None
 
     def _state(self):
@@ -80,7 +82,7 @@ class SparkyAvatar:
             pending = [{"id": c["id"], "url": f"/audio/{c['id']}"} for c in self._audio]
             gen = self._gen
         return {"speaking": speaking, "emotion": emotion, "name": SPARKY_NAME,
-                "gen": gen, "audio": pending}
+                "gen": gen, "audio": pending, "tts": TTS_ENGINE}
 
     def start(self):
         if not AVATAR_ENABLED:
@@ -113,16 +115,21 @@ class SparkyAvatar:
                         cid = int(self.path.rsplit("/", 1)[1].split("?")[0])
                     except ValueError:
                         cid = -1
-                    data = avatar.take_audio(cid)
-                    if data is None:
+                    clip = avatar.take_audio(cid)
+                    if clip is None:
                         self.send_error(404, "audio no disponible")
                         return
+                    import base64
+                    payload = {"audio": base64.b64encode(clip["data"]).decode("ascii")}
+                    if clip.get("visemes"):
+                        payload.update(clip["visemes"])  # visemes, vtimes, vdurations
+                    body = json.dumps(payload).encode("utf-8")
                     self.send_response(200)
-                    self.send_header("Content-Type", "audio/wav")
-                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
-                    self.wfile.write(data)
+                    self.wfile.write(body)
                     return
                 elif self.path.startswith("/state"):
                     body = json.dumps(avatar._state()).encode("utf-8")

@@ -10,3 +10,4 @@ realtimetts[system]
 audioop-lts
 nvidia-riva-client
 websockets==16.0          # lo exige RealtimeSTT; gana sobre el <16 de riva (solo uso gRPC de riva)
+azure-cognitiveservices-speech   # TTS humano + visemas para lip-sync exacto

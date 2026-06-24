@@ -47,8 +47,19 @@ VOICE_RATE = 165                    # Velocidad pyttsx3 (fallback)
 FILLER_ENABLED = True
 FILLER_PHRASES = ["Mmm,", "A ver,", "Déjame ver,"]
 
+# ── Motor de voz (TTS) ───────────────────────────────────────
+# "azure" (voz humana + labios exactos) | "piper" (local, gratis) | "riva" (Chatterbox)
+TTS_ENGINE = "azure"
+
+# ── Azure Speech (voz neuronal + visemas) ────────────────────
+AZURE_SPEECH_REGION = "eastus"     # la región de tu recurso (eastus, brazilsouth, etc.)
+AZURE_VOICE = "es-MX-DaliaNeural"  # es-MX-DaliaNeural, es-MX-JorgeNeural, es-ES-ElviraNeural...
+try:
+    from sparky.secrets import AZURE_SPEECH_KEY
+except ImportError:
+    AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
+
 # ── Chatterbox TTS (NVIDIA Riva gRPC) ────────────────────────
-TTS_ENGINE = "piper"               # "piper" (local, gratis) | "riva" (Chatterbox; requiere function-id habilitado en tu cuenta)
 RIVA_SERVER = "grpc.nvcf.nvidia.com:443"
 RIVA_FUNCTION_ID = "ddacc747-1269-4fab-bfd9-8f593dead106"  # chatterbox-multilingual-tts
 RIVA_VOICE = "Chatterbox-Multilingual.es-US.Female"  # conjetura; confirma el real con list_voices.py
