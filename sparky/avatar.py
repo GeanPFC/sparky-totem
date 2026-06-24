@@ -50,6 +50,10 @@ class SparkyAvatar:
         self._gen = 0                    # generación: sube en barge-in para cancelar
         self._next_id = 0
         self._audio_lock = threading.Lock()
+        self._busy = False               # ¿el navegador está reproduciendo ahora mismo?
+
+    def browser_busy(self):
+        return self._busy
 
     # ── Cola de audio (navegador reproduce → HeadAudio lip-sync) ──
 
@@ -90,12 +94,19 @@ class SparkyAvatar:
         avatar = self
 
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"   # keep-alive: evita ERR_CONNECTION_RESET bajo sondeo
+
             def log_message(self, *a):
                 pass  # silenciar logs HTTP
 
             def do_GET(self):
               try:
-                if self.path.startswith("/log"):
+                if self.path.startswith("/busy"):
+                    v = parse_qs(urlparse(self.path).query).get("v", ["0"])[0]
+                    avatar._busy = (v == "1")
+                    body = b"ok"
+                    ctype = "text/plain"
+                elif self.path.startswith("/log"):
                     msg = parse_qs(urlparse(self.path).query).get("m", [""])[0]
                     line = "[" + time.strftime("%H:%M:%S") + "] navegador: " + msg
                     try:

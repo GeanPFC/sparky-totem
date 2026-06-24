@@ -156,6 +156,7 @@ let audioQueue = [];
 let currentSrc = null;
 function enqueueBuffer(buffer, id) {
   audioQueue.push({ buffer, id });
+  reportBusy();
   pumpAudio();
 }
 function pumpAudio() {
@@ -163,9 +164,9 @@ function pumpAudio() {
   const { buffer, id } = audioQueue.shift();
   const src = head.audioCtx.createBufferSource();
   src.buffer = buffer;
-  src.connect(headaudio);                   // → detección de visemas → labios
+  if (headaudio) src.connect(headaudio);    // → detección de visemas → labios
   src.connect(head.audioCtx.destination);   // → altavoces
-  src.onended = () => { currentSrc = null; pumpAudio(); };
+  src.onended = () => { currentSrc = null; reportBusy(); pumpAudio(); };
   currentSrc = src;
   src.start();
   log("reproduciendo audio " + id + " (" + buffer.duration.toFixed(1) + "s)");
@@ -173,6 +174,7 @@ function pumpAudio() {
 function stopAllAudio() {                    // barge-in
   audioQueue = [];
   if (currentSrc) { try { currentSrc.stop(); } catch(e){} currentSrc = null; }
+  reportBusy();
 }
 
 // ── Reproductor Azure: audio + visemas EXACTOS (animados a mano vía mtAvatar) ──
@@ -183,18 +185,32 @@ function setViseme(name) {
     if (o) Object.assign(o, { newvalue: (v === name ? 0.9 : 0), needsUpdate: true });
   }
 }
+// Reporta al servidor si el navegador está reproduciendo (para barge-in real)
+let lastBusy = null;
+function reportBusy() {
+  const b = !!(azBusy || azQueue.length || currentSrc || audioQueue.length);
+  if (b !== lastBusy) { lastBusy = b; fetch("/busy?v=" + (b ? 1 : 0)).catch(()=>{}); }
+}
+
 let azQueue = [], azBusy = false, azSrc = null;
 function enqueueAzure(buffer, visemes, vtimes, id) {
   azQueue.push({ buffer, visemes, vtimes, id });
+  reportBusy();
   pumpAzure();
 }
 function pumpAzure() {
   if (azBusy || !azQueue.length) return;
-  azBusy = true;
+  azBusy = true; reportBusy();
   const { buffer, visemes, vtimes, id } = azQueue.shift();
-  const src = head.audioCtx.createBufferSource();
-  src.buffer = buffer;
-  src.connect(head.audioCtx.destination);
+  let src;
+  try {
+    src = head.audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(head.audioCtx.destination);
+  } catch (e) {
+    log("pumpAzure " + id + " ERROR: " + (e.message || e));
+    azBusy = false; reportBusy(); pumpAzure(); return;
+  }
   azSrc = src;
   const start = head.audioCtx.currentTime;
   let i = 0, cur = "sil";
@@ -206,7 +222,7 @@ function pumpAzure() {
     if (el < buffer.duration * 1000 + 150) requestAnimationFrame(tick);
     else setViseme("sil");
   }
-  src.onended = () => { if (azSrc === src) azSrc = null; azBusy = false; setViseme("sil"); pumpAzure(); };
+  src.onended = () => { if (azSrc === src) azSrc = null; azBusy = false; setViseme("sil"); reportBusy(); pumpAzure(); };
   src.start();
   log("hablando " + id + " con " + visemes.length + " visemas");
   requestAnimationFrame(tick);
@@ -214,7 +230,7 @@ function pumpAzure() {
 function stopAzure() {                         // barge-in
   azQueue = [];
   if (azSrc) { try { azSrc.stop(); } catch(e){} azSrc = null; }
-  azBusy = false; setViseme("sil");
+  azBusy = false; setViseme("sil"); reportBusy();
 }
 
 function startSpeakLoop() {

@@ -365,11 +365,16 @@ class SparkyVoice:
             self._is_speaking.clear()
 
     def _wait_browser_done(self):
-        """En modo navegador, espera a que el audio encolado termine de sonar."""
+        """Espera a que el navegador realmente TERMINE de reproducir (no por
+        estimación). Así is_speaking sigue True mientras suena → barge-in real."""
         if not self._to_browser:
             return
-        # +0.6s de margen: el navegador empieza a sonar ~0.3s tras recibir el clip
-        while not self._stop_flag.is_set() and time.time() < self._speech_end + 0.6:
+        # 1) esperar a que EMPIECE a sonar (hasta 4s por la latencia de descarga)
+        t0 = time.time()
+        while not self._stop_flag.is_set() and not self._avatar.browser_busy() and time.time() - t0 < 4:
+            time.sleep(0.05)
+        # 2) esperar a que DEJE de sonar
+        while not self._stop_flag.is_set() and self._avatar.browser_busy():
             time.sleep(0.05)
 
     def start_speaking(self):
